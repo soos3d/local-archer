@@ -1,0 +1,226 @@
+"""Main Archer Assistant orchestrator."""
+
+import os
+
+import nltk
+import numpy as np
+from rich.console import Console
+
+from archer.audio.player import AudioPlayer
+from archer.audio.recorder import AudioRecorder
+from archer.core.config import ArcherConfig, STTConfig, TTSConfig, LLMConfig, PersonalityConfig
+from archer.llm.base import BaseLLM
+from archer.llm.ollama_llm import OllamaLLM
+from archer.stt.base import BaseSTT
+from archer.stt.whisper_stt import WhisperSTT
+from archer.tts.base import BaseTTS
+from archer.tts.chatterbox_tts import ChatterboxTTS
+from archer.tts.pocket_tts import PocketTTS
+
+console = Console()
+
+
+def create_stt(config: STTConfig) -> BaseSTT:
+    """
+    Factory function to create STT provider.
+
+    Args:
+        config: STT configuration.
+
+    Returns:
+        STT provider instance.
+    """
+    if config.provider == "whisper":
+        stt = WhisperSTT(config)
+        stt.load_model()
+        return stt
+    else:
+        raise ValueError(f"Unknown STT provider: {config.provider}")
+
+
+def create_tts(config: TTSConfig) -> BaseTTS:
+    """
+    Factory function to create TTS provider.
+
+    Args:
+        config: TTS configuration.
+
+    Returns:
+        TTS provider instance.
+    """
+    if config.provider == "chatterbox":
+        return ChatterboxTTS(config)
+    elif config.provider == "pocket_tts":
+        return PocketTTS(config)
+    else:
+        raise ValueError(f"Unknown TTS provider: {config.provider}")
+
+
+def create_llm(config: LLMConfig, personality: PersonalityConfig) -> BaseLLM:
+    """
+    Factory function to create LLM provider.
+
+    Args:
+        config: LLM configuration.
+        personality: Personality configuration.
+
+    Returns:
+        LLM provider instance.
+    """
+    if config.provider == "ollama":
+        return OllamaLLM(config, personality)
+    else:
+        raise ValueError(f"Unknown LLM provider: {config.provider}")
+
+
+class Assistant:
+    """Main Archer Voice Assistant orchestrator."""
+
+    def __init__(self, config: ArcherConfig):
+        """
+        Initialize the Archer Assistant.
+
+        Args:
+            config: Full Archer configuration.
+        """
+        self.config = config
+        self.session_id = "archer_session"
+        self.response_count = 0
+
+        console.print(f"[cyan]🤖 {config.assistant_name} Voice Assistant")
+        console.print("[cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+        # Initialize components
+        console.print("[dim]Loading STT model...[/dim]")
+        self.stt = create_stt(config.stt)
+
+        console.print("[dim]Loading TTS model...[/dim]")
+        self.tts = create_tts(config.tts)
+
+        console.print("[dim]Initializing LLM...[/dim]")
+        self.llm = create_llm(config.llm, config.personality)
+
+        # Audio components
+        self.recorder = AudioRecorder(
+            sample_rate=config.audio.sample_rate,
+            channels=config.audio.channels,
+        )
+        self.player = AudioPlayer()
+
+        # Create output directory if saving responses
+        if config.tts.save_responses:
+            os.makedirs(config.tts.output_dir, exist_ok=True)
+
+        self._print_config()
+
+    def _print_config(self) -> None:
+        """Print current configuration."""
+        if self.config.tts.voice_sample:
+            console.print(f"[green]Voice cloning: {self.config.tts.voice_sample}")
+        else:
+            console.print("[yellow]Using default voice (no cloning)")
+
+        console.print(f"[blue]LLM model: {self.config.llm.model}")
+        console.print(f"[blue]Personality: {self.config.personality.name}")
+        console.print("[cyan]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        console.print("[cyan]Press Ctrl+C to exit.\n")
+
+    def analyze_emotion(self, text: str) -> float:
+        """
+        Analyze text for emotional content to adjust TTS.
+
+        Args:
+            text: Text to analyze.
+
+        Returns:
+            Exaggeration value (0.3-0.9).
+        """
+        emotion_config = self.config.personality.emotion
+        keywords = self.config.personality.emotional_keywords
+
+        score = emotion_config.base_exaggeration
+
+        text_lower = text.lower()
+
+        # Check all keyword categories
+        for category in ["positive", "negative", "emphasis"]:
+            for keyword in keywords.get(category, []):
+                if keyword in text_lower:
+                    score += emotion_config.keyword_boost
+
+        # Clamp to valid range
+        return min(
+            emotion_config.max_exaggeration,
+            max(emotion_config.min_exaggeration, score),
+        )
+
+    def _process_input(self, audio) -> None:
+        """
+        Process a single voice input.
+
+        Args:
+            audio: Audio data as numpy array.
+        """
+        if audio.size == 0:
+            console.print("[red]No audio recorded. Please ensure your microphone is working.")
+            return
+
+        # Transcribe
+        with console.status("Transcribing...", spinner="dots"):
+            text = self.stt.transcribe(audio)
+
+        if not text:
+            return
+
+        console.print(f"[yellow]You: {text}")
+
+        # Generate LLM response
+        with console.status("Generating response...", spinner="dots"):
+            response = self.llm.generate(text, self.session_id)
+
+        # Analyze emotion for TTS
+        exaggeration = self.analyze_emotion(response)
+        cfg_weight = self.config.tts.cfg_weight
+        if exaggeration > 0.6:
+            cfg_weight *= 0.8
+
+        console.print(f"[cyan]{self.config.assistant_name}: {response}")
+        console.print(f"[dim](Emotion: {exaggeration:.2f}, CFG: {cfg_weight:.2f})[/dim]")
+
+        # Synthesize each sentence, then play everything in one continuous stream
+        sentences = nltk.sent_tokenize(response)
+        audio_chunks: list[np.ndarray] = []
+        sample_rate = self.tts.sample_rate
+
+        with console.status("Synthesizing speech...", spinner="dots"):
+            for i, sentence in enumerate(sentences):
+                sample_rate, audio_chunk = self.tts.synthesize(
+                    sentence,
+                    voice_sample=self.config.tts.voice_sample,
+                    exaggeration=exaggeration,
+                    cfg_weight=cfg_weight,
+                )
+                if i > 0:
+                    audio_chunks.append(np.zeros(int(0.25 * sample_rate), dtype=np.float32))
+                audio_chunks.append(audio_chunk)
+
+        if audio_chunks:
+            self.player.play(np.concatenate(audio_chunks), sample_rate)
+
+        # Save full audio if configured
+        if self.config.tts.save_responses:
+            self.response_count += 1
+            filename = f"{self.config.tts.output_dir}/response_{self.response_count:03d}.wav"
+            self.tts.save_audio(response, filename, self.config.tts.voice_sample)
+            console.print(f"[dim]Voice saved to: {filename}[/dim]")
+
+    def run(self) -> None:
+        """Run the main conversation loop."""
+        try:
+            while True:
+                audio = self.recorder.record_until_enter()
+                self._process_input(audio)
+        except KeyboardInterrupt:
+            console.print("\n[red]Exiting...")
+
+        console.print(f"[blue]Session ended. Thank you for using {self.config.assistant_name}!")

@@ -1,23 +1,37 @@
 [project]
-name = "local-talking-llm"
+name = "archer-assistant"
 version = "0.1.0"
-description = "Add your description here"
+description = "Archer - Local Voice Assistant with Ollama, Whisper, and ChatterBox"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "chatterbox-tts>=0.1.1",
+    "pocket-tts>=0.1.0",
     "langchain-ollama>=0.3.3",
     "langchain>=0.3.25",
     "nltk>=3.9.1",
     "openai-whisper>=20240930",
-    "peft>=0.15.2",
+    "pyyaml>=6.0",
     "rich>=14.0.0",
     "setuptools>=80.9.0",
     "sounddevice>=0.5.2",
     "torchaudio>=2.6.0",
 ]
 
+[project.scripts]
+archer = "app:main"
+
+[tool.setuptools.packages.find]
+include = ["archer*"]
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.2.0",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-mock>=3.14",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=archer --cov=app --cov-report=term-missing --cov-fail-under=80"

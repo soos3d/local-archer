@@ -1,0 +1,30 @@
+# Archer Voice Assistant Configuration
+# =====================================
+
+assistant:
+  name: "Archer"
+  personality: "archer" # References config/personalities/archer.yaml
+
+audio:
+  sample_rate: 16000
+  channels: 1
+
+stt:
+  provider: "whisper"
+  model: "base.en"
+  fp16: false # Set to true if using GPU
+  min_audio_duration: 0.5  # Reject clips shorter than this many seconds
+  silence_threshold: 0.001  # RMS amplitude below this is treated as silence
+
+tts:
+  provider: "pocket_tts"
+  voice_sample: "voice-samples/archer/videoplayback.wav" # Path to audio file for voice cloning (overrides voice_name)
+  voice_name: null  # Built-in voice: alba, marius, javert, jean, fantine, cosette, eponine, azelma
+  cfg_weight: 0.5 # Pacing control (0.0-1.0, used by chatterbox only)
+  save_responses: false
+  output_dir: "voices"
+
+llm:
+  provider: "ollama"
+  model: "gemma3"
+  base_url: "http://localhost:11434"
