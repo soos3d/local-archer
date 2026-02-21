@@ -18,7 +18,7 @@ stt:
 
 tts:
   provider: "pocket_tts"
-  voice_sample: "voice-samples/archer/archer2.wav" # Path to audio file for voice cloning (overrides voice_name)
+  voice_sample: "voice-samples/archer/archer-better.wav" # Path to audio file for voice cloning (overrides voice_name)
   voice_name: null  # Built-in voice: alba, marius, javert, jean, fantine, cosette, eponine, azelma
   cfg_weight: 0.5 # Pacing control (0.0-1.0, used by chatterbox only)
   save_responses: false
