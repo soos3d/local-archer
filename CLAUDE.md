@@ -4,84 +4,72 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Archer** is a fully local voice assistant that chains three AI models: OpenAI Whisper (STT) → Ollama (LLM) → ChatterBox (TTS). It runs offline; all inference is local. The entry point is `app.py`.
+**Archer** is a fully local voice assistant that chains three AI models: OpenAI Whisper (STT) → Ollama (LLM) → Pocket TTS/ChatterBox (TTS). All inference runs offline. The entry point is `app.py`.
 
 ## Commands
 
 ```bash
-# Install (prefer uv, or pip)
+# Install
 pip install -e .
 
-# Download required NLTK data (one-time setup)
+# Install dev dependencies (pytest, pre-commit, etc.)
+pip install -e ".[dev]"  # or: uv sync --group dev
+
+# Download required NLTK data (one-time)
 python -c "import nltk; nltk.download('punkt_tab')"
 
-# Run the assistant
+# Run the assistant (Ollama must be running: ollama serve)
 python app.py
 python app.py --config config/custom.yaml
 python app.py --model llama3 --exaggeration 0.7 --save-voice
-python app.py --voice path/to/sample.wav   # voice cloning
+python app.py --voice path/to/sample.wav
 
-# Lint (runs ruff + mypy + pre-commit hooks)
-make lint
-# or directly:
+# Run all tests (enforces 80% coverage via pytest-cov)
+pytest
+
+# Run a single test file
+pytest tests/unit/test_config.py
+
+# Run a specific test
+pytest tests/unit/test_config.py::test_function_name -v
+
+# Lint (ruff + mypy + gitleaks via pre-commit)
 pre-commit run --all-files
-
-# Ollama must be running before starting the assistant
-ollama serve
-ollama pull gemma3
 ```
 
 ## Architecture
 
-The pipeline is strictly sequential per turn: record → transcribe → generate → synthesize → play.
+The pipeline is strictly sequential per turn: **record → transcribe → generate → synthesize → play**.
 
-```
-app.py          CLI entry point; parses args, loads config, creates Assistant
-archer/
-  core/
-    config.py       Dataclasses (ArcherConfig, STTConfig, TTSConfig, LLMConfig,
-                    PersonalityConfig, EmotionConfig) + YAML loader.
-                    Config merges config/default.yaml + config/personalities/<name>.yaml
-    assistant.py    Assistant class: orchestrates the pipeline; factory functions
-                    create_stt/create_tts/create_llm for provider selection
-  audio/
-    recorder.py     AudioRecorder — starts a background thread, stops on Enter key
-    player.py       AudioPlayer — plays numpy audio arrays via sounddevice
-  stt/
-    base.py         BaseSTT abstract interface
-    whisper_stt.py  WhisperSTT — wraps openai-whisper; call load_model() before use
-  tts/
-    base.py         BaseTTS abstract interface (synthesize + synthesize_long)
-    chatterbox_tts.py  ChatterboxTTS — splits text into sentences with NLTK,
-                       synthesizes each, concatenates audio arrays
-  llm/
-    base.py         BaseLLM abstract interface (generate, clear_history, set_system_prompt)
-    ollama_llm.py   OllamaLLM — wraps langchain-ollama; maintains per-session
-                    InMemoryChatMessageHistory; uses RunnableWithMessageHistory
-  tools/            Empty; reserved for future API integrations
-config/
-  default.yaml                Main config (assistant name, provider settings)
-  personalities/archer.yaml   System prompt + emotional_keywords + emotion params
-```
+### Provider Pattern
 
-## Extending Providers
+Each layer (STT, TTS, LLM) follows the same pattern:
+- Abstract base class in `archer/<layer>/base.py` defines the interface
+- Concrete implementations in sibling files (e.g., `whisper_stt.py`, `pocket_tts.py`, `ollama_llm.py`)
+- Factory functions (`create_stt`, `create_tts`, `create_llm`) in `archer/core/assistant.py` instantiate providers by name from config
 
-Each layer (STT, TTS, LLM) uses an abstract base class. To add a new provider:
-1. Create a new file in the relevant `archer/<layer>/` directory
-2. Subclass the `Base*` class and implement its abstract methods
-3. Add a new branch in the corresponding `create_*` factory function in `archer/core/assistant.py`
+To add a new provider: subclass `Base*`, implement abstract methods, add a branch in the corresponding `create_*` factory.
 
-## Adding a Personality
+### Configuration
 
-Create `config/personalities/<name>.yaml` mirroring `archer.yaml`, then set `assistant.personality: <name>` in `config/default.yaml` (or pass `--config`).
+`archer/core/config.py` defines dataclasses (`ArcherConfig`, `STTConfig`, `TTSConfig`, `LLMConfig`, `PersonalityConfig`, `EmotionConfig`). `load_config()` merges `config/default.yaml` with `config/personalities/<name>.yaml`. CLI args override config values via direct attribute mutation in `app.py`.
 
-## Key Behaviors
+### Key Behaviors
 
-- **Emotion control**: `Assistant.analyze_emotion()` scans LLM output for keywords and adjusts ChatterBox's `exaggeration` parameter dynamically (range 0.3–0.9).
-- **Long TTS**: `synthesize_long()` splits text into sentences via NLTK and concatenates audio to avoid context-length limits in ChatterBox.
-- **Conversation memory**: LangChain `InMemoryChatMessageHistory` is keyed by `session_id`; clears on process restart.
-- **Device acceleration**: Whisper and ChatterBox auto-detect CUDA/MPS; no manual configuration needed.
+- **Emotion control**: `Assistant.analyze_emotion()` scans LLM output for keywords defined in personality YAML and adjusts the TTS `exaggeration` parameter (range 0.3–0.9).
+- **Long TTS**: Text is split into sentences via NLTK `sent_tokenize`, synthesized individually, then concatenated with 250ms silence gaps before playback.
+- **Conversation memory**: LangChain `InMemoryChatMessageHistory` keyed by `session_id`; resets on process restart.
+- **Device acceleration**: Whisper and TTS models auto-detect CUDA/MPS.
+
+### TTS Providers
+
+- **Pocket TTS** (default, `provider: "pocket_tts"`): Fast (~6x real-time on CPU). Supports 8 built-in voices and voice cloning (requires HuggingFace login).
+- **ChatterBox** (legacy, `provider: "chatterbox"`): Slower, supports `exaggeration` and `cfg_weight` controls.
+
+## Testing
+
+Tests live in `tests/unit/` and `tests/integration/`. pytest is configured in `pyproject.toml` with `--cov-fail-under=80`. Shared fixtures are in `tests/conftest.py`.
 
 ## Pre-commit Hooks
 
-Configured in `.pre-commit-config.yaml`: ruff (linting + autofix), mypy (type checking), standard file fixers, and gitleaks (secret scanning).
+Configured in `.pre-commit-config.yaml`: ruff (lint + autofix), mypy (type checking, excludes tests), standard file fixers (trailing whitespace, EOF), and gitleaks (secret scanning).

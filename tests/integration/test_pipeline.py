@@ -39,35 +39,33 @@ def _make_assistant(config=None):
 
 class TestPipelineProcessInput:
     def test_full_pipeline_happy_path(self, sample_audio):
-        assistant, mock_stt, mock_tts, mock_llm, _, mock_player = _make_assistant()
+        assistant, mock_stt, mock_tts, mock_llm, _, _ = _make_assistant()
         mock_stt.transcribe.return_value = "What is the weather?"
-        mock_llm.generate.return_value = "It is sunny today."
+        mock_llm.stream.return_value = iter(["It is sunny today."])
 
-        assistant._process_input(sample_audio)
+        with patch("archer.audio.pipeline.sd"):
+            assistant._process_input(sample_audio)
 
         mock_stt.transcribe.assert_called_once_with(sample_audio)
-        mock_llm.generate.assert_called_once_with("What is the weather?", "archer_session")
+        mock_llm.stream.assert_called_once_with("What is the weather?", "archer_session")
         mock_tts.synthesize.assert_called_once()
-        mock_player.play.assert_called_once()
 
     def test_empty_audio_skips_pipeline(self):
-        assistant, mock_stt, mock_tts, mock_llm, _, mock_player = _make_assistant()
+        assistant, mock_stt, mock_tts, mock_llm, _, _ = _make_assistant()
 
         assistant._process_input(np.array([], dtype=np.float32))
 
         mock_stt.transcribe.assert_not_called()
-        mock_llm.generate.assert_not_called()
-        mock_player.play.assert_not_called()
+        mock_llm.stream.assert_not_called()
 
     def test_empty_transcription_skips_llm(self, sample_audio):
-        assistant, mock_stt, mock_tts, mock_llm, _, mock_player = _make_assistant()
+        assistant, mock_stt, mock_tts, mock_llm, _, _ = _make_assistant()
         mock_stt.transcribe.return_value = ""
 
         assistant._process_input(sample_audio)
 
         mock_stt.transcribe.assert_called_once()
-        mock_llm.generate.assert_not_called()
-        mock_player.play.assert_not_called()
+        mock_llm.stream.assert_not_called()
 
     def test_emotion_boosts_exaggeration_for_keywords(self, sample_audio):
         config = ArcherConfig()
@@ -77,9 +75,10 @@ class TestPipelineProcessInput:
         )
         assistant, mock_stt, mock_tts, mock_llm, _, _ = _make_assistant(config)
         mock_stt.transcribe.return_value = "test input"
-        mock_llm.generate.return_value = "That is amazing!"
+        mock_llm.stream.return_value = iter(["That is amazing!"])
 
-        assistant._process_input(sample_audio)
+        with patch("archer.audio.pipeline.sd"):
+            assistant._process_input(sample_audio)
 
         call_kwargs = mock_tts.synthesize.call_args[1]
         assert call_kwargs["exaggeration"] == pytest.approx(0.6)
@@ -93,45 +92,48 @@ class TestPipelineProcessInput:
         )
         assistant, mock_stt, mock_tts, mock_llm, _, _ = _make_assistant(config)
         mock_stt.transcribe.return_value = "test"
-        # 3 positive keywords push exaggeration to 0.8 (> 0.6 threshold)
-        mock_llm.generate.return_value = "That is amazing, wonderful, and incredible!"
+        mock_llm.stream.return_value = iter([
+            "That is amazing, wonderful, and incredible!"
+        ])
 
-        assistant._process_input(sample_audio)
+        with patch("archer.audio.pipeline.sd"):
+            assistant._process_input(sample_audio)
 
         call_kwargs = mock_tts.synthesize.call_args[1]
         assert call_kwargs["cfg_weight"] == pytest.approx(0.8)  # 1.0 * 0.8
 
     def test_multi_sentence_response_calls_synthesize_per_sentence(self, sample_audio):
-        assistant, mock_stt, mock_tts, mock_llm, _, mock_player = _make_assistant()
+        assistant, mock_stt, mock_tts, mock_llm, _, _ = _make_assistant()
         mock_stt.transcribe.return_value = "tell me a story"
-        mock_llm.generate.return_value = "Once upon a time. There was a dragon. The end."
+        mock_llm.stream.return_value = iter([
+            "Once upon a time.", "There was a dragon.", "The end."
+        ])
 
-        assistant._process_input(sample_audio)
+        with patch("archer.audio.pipeline.sd"):
+            assistant._process_input(sample_audio)
 
         assert mock_tts.synthesize.call_count == 3
-        mock_player.play.assert_called_once()
 
-    def test_multi_sentence_player_receives_concatenated_audio(self, sample_audio):
-        assistant, mock_stt, mock_tts, mock_llm, _, mock_player = _make_assistant()
+    def test_multi_sentence_pipeline_plays_each_chunk(self, sample_audio):
+        assistant, mock_stt, mock_tts, mock_llm, _, _ = _make_assistant()
         mock_stt.transcribe.return_value = "tell me"
-        mock_llm.generate.return_value = "First sentence. Second sentence."
+        mock_llm.stream.return_value = iter(["First sentence.", "Second sentence."])
 
-        assistant._process_input(sample_audio)
+        with patch("archer.audio.pipeline.sd") as mock_sd:
+            assistant._process_input(sample_audio)
 
-        played_audio = mock_player.play.call_args[0][0]
-        # 2 sentences (16000 each) + 1 silence gap (4000) = 36000
-        silence_len = int(0.25 * 16000)  # 4000
-        expected_len = 16000 + silence_len + 16000
-        assert len(played_audio) == expected_len
+        # Each sentence gets a play + wait; second sentence also gets silence play
+        assert mock_sd.play.call_count >= 2
 
     def test_save_responses_calls_save_audio(self, sample_audio):
         config = ArcherConfig()
         config.tts = TTSConfig(save_responses=True, output_dir="test_voices")
         assistant, mock_stt, mock_tts, mock_llm, _, _ = _make_assistant(config)
         mock_stt.transcribe.return_value = "test"
-        mock_llm.generate.return_value = "Hello."
+        mock_llm.stream.return_value = iter(["Hello."])
 
-        assistant._process_input(sample_audio)
+        with patch("archer.audio.pipeline.sd"):
+            assistant._process_input(sample_audio)
 
         mock_tts.save_audio.assert_called_once()
         call_args = mock_tts.save_audio.call_args[0]
@@ -142,10 +144,14 @@ class TestPipelineProcessInput:
         config.tts = TTSConfig(save_responses=True, output_dir="test_voices")
         assistant, mock_stt, mock_tts, mock_llm, _, _ = _make_assistant(config)
         mock_stt.transcribe.return_value = "test"
-        mock_llm.generate.return_value = "Hello."
+        mock_llm.stream.return_value = iter(["Hello."])
 
-        assistant._process_input(sample_audio)
-        assistant._process_input(sample_audio)
+        with patch("archer.audio.pipeline.sd"):
+            assistant._process_input(sample_audio)
+
+        mock_llm.stream.return_value = iter(["World."])
+        with patch("archer.audio.pipeline.sd"):
+            assistant._process_input(sample_audio)
 
         assert assistant.response_count == 2
         second_call = mock_tts.save_audio.call_args_list[1][0]

@@ -1,7 +1,5 @@
 """Unit tests for archer.stt.whisper_stt."""
 
-import numpy as np
-import pytest
 from unittest.mock import MagicMock, patch
 
 from archer.core.config import STTConfig

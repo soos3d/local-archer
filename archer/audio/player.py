@@ -17,4 +17,3 @@ class AudioPlayer:
         """
         sd.play(audio_array, sample_rate)
         sd.wait()
-

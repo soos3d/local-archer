@@ -119,4 +119,3 @@ class PocketTTS(BaseTTS):
         """
         _, audio = self.synthesize_long(text)
         sf.write(output_path, audio, self._sample_rate)
-

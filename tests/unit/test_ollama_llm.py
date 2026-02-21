@@ -1,6 +1,5 @@
 """Unit tests for archer.llm.ollama_llm."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 
 from archer.core.config import LLMConfig, PersonalityConfig
@@ -97,6 +96,53 @@ class TestOllamaLLMSetSystemPrompt:
             MockHistory.return_value = new_chain
             llm.set_system_prompt("Updated prompt.")
             assert llm._chain_with_history is new_chain
+
+
+class TestOllamaLLMStream:
+    def test_stream_yields_sentences(self):
+        llm = _make_ollama_llm()
+        llm._chain_with_history.stream.return_value = iter([
+            "Hello ", "world. ", "How ", "are ", "you? ", "Fine."
+        ])
+        sentences = list(llm.stream("hi", "test_session"))
+        assert sentences == ["Hello world.", "How are you?", "Fine."]
+
+    def test_stream_yields_remainder_without_terminator(self):
+        llm = _make_ollama_llm()
+        llm._chain_with_history.stream.return_value = iter([
+            "Hello world"
+        ])
+        sentences = list(llm.stream("hi", "session"))
+        assert sentences == ["Hello world"]
+
+    def test_stream_handles_exclamation_and_question(self):
+        llm = _make_ollama_llm()
+        llm._chain_with_history.stream.return_value = iter([
+            "Wow! ", "Really? ", "Yes."
+        ])
+        sentences = list(llm.stream("hi", "session"))
+        assert sentences == ["Wow!", "Really?", "Yes."]
+
+    def test_stream_empty_response(self):
+        llm = _make_ollama_llm()
+        llm._chain_with_history.stream.return_value = iter([])
+        sentences = list(llm.stream("hi", "session"))
+        assert sentences == []
+
+    def test_stream_uses_correct_session_id(self):
+        llm = _make_ollama_llm()
+        llm._chain_with_history.stream.return_value = iter(["Hello."])
+        list(llm.stream("hi", "my_session"))
+        call_kwargs = llm._chain_with_history.stream.call_args[1]
+        assert call_kwargs["config"]["configurable"]["session_id"] == "my_session"
+
+    def test_stream_whitespace_only_remainder_not_yielded(self):
+        llm = _make_ollama_llm()
+        llm._chain_with_history.stream.return_value = iter([
+            "Hello. ", "  "
+        ])
+        sentences = list(llm.stream("hi", "session"))
+        assert sentences == ["Hello."]
 
 
 class TestOllamaLLMInit:

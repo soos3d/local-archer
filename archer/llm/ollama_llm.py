@@ -1,5 +1,8 @@
 """Ollama Language Model implementation."""
 
+import re
+from collections.abc import Iterator
+
 from langchain_core.chat_history import InMemoryChatMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
@@ -7,6 +10,8 @@ from langchain_ollama import OllamaLLM as LangchainOllama
 
 from archer.core.config import LLMConfig, PersonalityConfig
 from archer.llm.base import BaseLLM
+
+_SENTENCE_END = re.compile(r"[.!?](?:\s|$)")
 
 
 class OllamaLLM(BaseLLM):
@@ -103,3 +108,38 @@ class OllamaLLM(BaseLLM):
             input_messages_key="input",
             history_messages_key="history",
         )
+
+    def stream(self, text: str, session_id: str = "default") -> Iterator[str]:
+        """
+        Stream response as complete sentences.
+
+        Tokens are buffered until a sentence terminator (. ! ?) followed by
+        whitespace or end-of-stream is detected, then the sentence is yielded.
+
+        Args:
+            text: User input text.
+            session_id: Session identifier for conversation history.
+
+        Yields:
+            Complete sentences from the response.
+        """
+        buffer = ""
+        for token in self._chain_with_history.stream(
+            {"input": text},
+            config={"configurable": {"session_id": session_id}},
+        ):
+            buffer += token
+            while True:
+                match = _SENTENCE_END.search(buffer)
+                if match is None:
+                    break
+                end = match.end()
+                sentence = buffer[:end].strip()
+                buffer = buffer[end:]
+                if sentence:
+                    yield sentence
+
+        # Yield any remaining text
+        remainder = buffer.strip()
+        if remainder:
+            yield remainder

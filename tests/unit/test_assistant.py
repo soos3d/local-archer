@@ -1,5 +1,6 @@
 """Unit tests for archer.core.assistant."""
 
+import numpy as np
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -105,6 +106,88 @@ class TestAnalyzeEmotion:
         assistant = _make_assistant(config)
         result = assistant.analyze_emotion("")
         assert result == pytest.approx(0.5)
+
+
+class TestProcessInput:
+    def test_process_input_uses_streaming_pipeline(self):
+        config = _make_config_with_emotions()
+        assistant = _make_assistant(config)
+
+        audio = np.ones(16000, dtype=np.float32)
+        assistant.stt.transcribe.return_value = "Hello"
+        assistant.llm.stream.return_value = iter(["Hi there.", "How are you?"])
+
+        with patch("archer.core.assistant.StreamingPipeline") as MockPipeline:
+            mock_pipeline = MagicMock()
+            mock_pipeline.run.return_value = np.ones(100, dtype=np.float32)
+            MockPipeline.return_value = mock_pipeline
+
+            assistant._process_input(audio)
+
+            MockPipeline.assert_called_once_with(assistant.tts)
+            mock_pipeline.run.assert_called_once()
+            call_kwargs = mock_pipeline.run.call_args
+            assert call_kwargs[0][0] == ["Hi there.", "How are you?"]
+
+    def test_process_input_empty_audio_returns_early(self):
+        config = _make_config_with_emotions()
+        assistant = _make_assistant(config)
+
+        audio = np.array([], dtype=np.float32)
+        assistant._process_input(audio)
+        assistant.stt.transcribe.assert_not_called()
+
+    def test_process_input_empty_transcription_returns_early(self):
+        config = _make_config_with_emotions()
+        assistant = _make_assistant(config)
+
+        audio = np.ones(16000, dtype=np.float32)
+        assistant.stt.transcribe.return_value = ""
+
+        assistant._process_input(audio)
+        assistant.llm.stream.assert_not_called()
+
+    def test_process_input_calls_stream_not_generate(self):
+        config = _make_config_with_emotions()
+        assistant = _make_assistant(config)
+
+        audio = np.ones(16000, dtype=np.float32)
+        assistant.stt.transcribe.return_value = "Hello"
+        assistant.llm.stream.return_value = iter(["Response."])
+
+        with patch("archer.core.assistant.StreamingPipeline") as MockPipeline:
+            mock_pipeline = MagicMock()
+            mock_pipeline.run.return_value = np.ones(100, dtype=np.float32)
+            MockPipeline.return_value = mock_pipeline
+
+            assistant._process_input(audio)
+
+        assistant.llm.stream.assert_called_once()
+        assistant.llm.generate.assert_not_called()
+
+    def test_process_input_strips_stage_directions(self):
+        config = _make_config_with_emotions()
+        assistant = _make_assistant(config)
+
+        audio = np.ones(16000, dtype=np.float32)
+        assistant.stt.transcribe.return_value = "Hello"
+        assistant.llm.stream.return_value = iter([
+            "(A long dramatic sigh)",
+            "Hello there.",
+            "(chuckles) How are you?",
+        ])
+
+        with patch("archer.core.assistant.StreamingPipeline") as MockPipeline:
+            mock_pipeline = MagicMock()
+            mock_pipeline.run.return_value = np.ones(100, dtype=np.float32)
+            MockPipeline.return_value = mock_pipeline
+
+            assistant._process_input(audio)
+
+            tts_sentences = mock_pipeline.run.call_args[0][0]
+            # Pure stage direction "(A long dramatic sigh)" should be dropped entirely
+            # "(chuckles) How are you?" should become "How are you?"
+            assert tts_sentences == ["Hello there.", "How are you?"]
 
 
 class TestCreateSTT:

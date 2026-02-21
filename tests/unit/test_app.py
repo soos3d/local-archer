@@ -1,6 +1,5 @@
 """Unit tests for app.py (CLI entry point)."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 
 import app as app_module

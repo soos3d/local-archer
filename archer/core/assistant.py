@@ -1,11 +1,13 @@
 """Main Archer Assistant orchestrator."""
 
 import os
+import re
 
-import nltk
-import numpy as np
 from rich.console import Console
 
+_STAGE_DIRECTION = re.compile(r"\([^)]*\)")
+
+from archer.audio.pipeline import StreamingPipeline
 from archer.audio.player import AudioPlayer
 from archer.audio.recorder import AudioRecorder
 from archer.core.config import ArcherConfig, STTConfig, TTSConfig, LLMConfig, PersonalityConfig
@@ -174,9 +176,13 @@ class Assistant:
 
         console.print(f"[yellow]You: {text}")
 
-        # Generate LLM response
+        # Stream LLM response, collecting sentences
+        sentences: list[str] = []
         with console.status("Generating response...", spinner="dots"):
-            response = self.llm.generate(text, self.session_id)
+            for sentence in self.llm.stream(text, self.session_id):
+                sentences.append(sentence)
+
+        response = " ".join(sentences)
 
         # Analyze emotion for TTS
         exaggeration = self.analyze_emotion(response)
@@ -187,25 +193,21 @@ class Assistant:
         console.print(f"[cyan]{self.config.assistant_name}: {response}")
         console.print(f"[dim](Emotion: {exaggeration:.2f}, CFG: {cfg_weight:.2f})[/dim]")
 
-        # Synthesize each sentence, then play everything in one continuous stream
-        sentences = nltk.sent_tokenize(response)
-        audio_chunks: list[np.ndarray] = []
-        sample_rate = self.tts.sample_rate
+        # Strip stage directions (e.g. "(sighs dramatically)") before TTS
+        tts_sentences = [
+            cleaned
+            for s in sentences
+            if (cleaned := _STAGE_DIRECTION.sub("", s).strip())
+        ]
 
-        with console.status("Synthesizing speech...", spinner="dots"):
-            for i, sentence in enumerate(sentences):
-                sample_rate, audio_chunk = self.tts.synthesize(
-                    sentence,
-                    voice_sample=self.config.tts.voice_sample,
-                    exaggeration=exaggeration,
-                    cfg_weight=cfg_weight,
-                )
-                if i > 0:
-                    audio_chunks.append(np.zeros(int(0.25 * sample_rate), dtype=np.float32))
-                audio_chunks.append(audio_chunk)
-
-        if audio_chunks:
-            self.player.play(np.concatenate(audio_chunks), sample_rate)
+        # Stream TTS synthesis + playback concurrently
+        pipeline = StreamingPipeline(self.tts)
+        pipeline.run(
+            tts_sentences,
+            voice_sample=self.config.tts.voice_sample,
+            exaggeration=exaggeration,
+            cfg_weight=cfg_weight,
+        )
 
         # Save full audio if configured
         if self.config.tts.save_responses:

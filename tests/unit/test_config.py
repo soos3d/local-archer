@@ -1,7 +1,6 @@
 """Unit tests for archer.core.config."""
 
 import yaml
-import pytest
 
 from archer.core.config import (
     ArcherConfig,

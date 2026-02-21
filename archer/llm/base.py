@@ -1,6 +1,7 @@
 """Abstract base class for Language Model providers."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 
 
 class BaseLLM(ABC):
@@ -39,3 +40,19 @@ class BaseLLM(ABC):
             prompt: New system prompt.
         """
         pass
+
+    def stream(self, text: str, session_id: str = "default") -> Iterator[str]:
+        """
+        Stream response as complete sentences.
+
+        Default implementation falls back to generate() and yields the full
+        response as a single chunk. Providers may override for true streaming.
+
+        Args:
+            text: User input text.
+            session_id: Session identifier for conversation history.
+
+        Yields:
+            Complete sentences from the response.
+        """
+        yield self.generate(text, session_id)

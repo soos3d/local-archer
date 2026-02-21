@@ -1,7 +1,6 @@
 """Unit tests for archer.tts.chatterbox_tts."""
 
 import numpy as np
-import pytest
 from unittest.mock import MagicMock, patch
 
 from archer.core.config import TTSConfig

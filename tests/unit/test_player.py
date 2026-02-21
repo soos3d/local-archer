@@ -1,7 +1,6 @@
 """Unit tests for archer.audio.player."""
 
 import numpy as np
-import pytest
 from unittest.mock import patch
 
 from archer.audio.player import AudioPlayer
