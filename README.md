@@ -23,8 +23,7 @@ A modular, local voice assistant powered by Ollama, Whisper, and Kyutai Pocket T
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/archer-assistant.git
-cd archer-assistant
+git clone https://github.com/soos3d/local-archer
 
 # Create and activate virtual environment
 python -m venv venv
