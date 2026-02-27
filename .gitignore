@@ -161,3 +161,4 @@ cython_debug/
 voicetree-21-2/
 venv/
 .mcp.json
+node_modules/
