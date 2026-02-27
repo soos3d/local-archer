@@ -2,6 +2,7 @@
 """Archer Voice Assistant - Entry Point."""
 
 import argparse
+from dataclasses import replace
 
 from archer.core.config import load_config
 from archer.core.assistant import Assistant
@@ -36,6 +37,16 @@ def main():
         action="store_true",
         help="Save generated voice responses",
     )
+    parser.add_argument(
+        "--vad",
+        action="store_true",
+        help="Enable VAD-based listening (wake word mode by default)",
+    )
+    parser.add_argument(
+        "--continuous",
+        action="store_true",
+        help="Enable continuous listening mode (implies --vad)",
+    )
     args = parser.parse_args()
 
     # Load configuration
@@ -50,6 +61,16 @@ def main():
         config.personality.emotion.base_exaggeration = args.exaggeration
     if args.save_voice:
         config.tts.save_responses = True
+    if args.continuous:
+        config = replace(
+            config,
+            listening=replace(config.listening, vad_enabled=True, mode="continuous"),
+        )
+    elif args.vad:
+        config = replace(
+            config,
+            listening=replace(config.listening, vad_enabled=True),
+        )
 
     # Run assistant
     assistant = Assistant(config)

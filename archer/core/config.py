@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -68,6 +68,21 @@ class PersonalityConfig:
 
 
 @dataclass
+class ListeningConfig:
+    """Voice activity detection and listening mode configuration."""
+
+    vad_enabled: bool = False
+    mode: Literal["wake_word", "continuous"] = "wake_word"
+    wake_word: str = "hey archer"
+    vad_threshold: float = 0.5
+    silence_duration_s: float = 1.2
+    pre_buffer_ms: int = 300
+    max_utterance_s: float = 30.0
+    conversation_timeout_s: float = 30.0
+    post_speech_delay_s: float = 0.8
+
+
+@dataclass
 class ArcherConfig:
     """Top-level configuration for Archer Voice Assistant."""
 
@@ -78,6 +93,7 @@ class ArcherConfig:
     tts: TTSConfig = field(default_factory=TTSConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     personality: PersonalityConfig = field(default_factory=PersonalityConfig)
+    listening: ListeningConfig = field(default_factory=ListeningConfig)
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -172,6 +188,20 @@ def load_config(config_path: str = "config/default.yaml") -> ArcherConfig:
         base_url=llm_data.get("base_url", "http://localhost:11434"),
     )
 
+    # Parse listening section
+    listening_data = data.get("listening", {})
+    listening_config = ListeningConfig(
+        vad_enabled=listening_data.get("vad_enabled", False),
+        mode=listening_data.get("mode", "wake_word"),
+        wake_word=listening_data.get("wake_word", "hey archer"),
+        vad_threshold=listening_data.get("vad_threshold", 0.5),
+        silence_duration_s=listening_data.get("silence_duration_s", 1.2),
+        pre_buffer_ms=listening_data.get("pre_buffer_ms", 300),
+        max_utterance_s=listening_data.get("max_utterance_s", 30.0),
+        conversation_timeout_s=listening_data.get("conversation_timeout_s", 30.0),
+        post_speech_delay_s=listening_data.get("post_speech_delay_s", 0.8),
+    )
+
     # Load personality
     personality_config = _load_personality(config_dir, personality_name)
 
@@ -183,4 +213,5 @@ def load_config(config_path: str = "config/default.yaml") -> ArcherConfig:
         tts=tts_config,
         llm=llm_config,
         personality=personality_config,
+        listening=listening_config,
     )

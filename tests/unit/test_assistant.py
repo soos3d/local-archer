@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from archer.core.config import (
     ArcherConfig,
     EmotionConfig,
+    ListeningConfig,
     LLMConfig,
     PersonalityConfig,
     STTConfig,
@@ -39,6 +40,7 @@ def _make_assistant(config: ArcherConfig) -> Assistant:
         patch("archer.core.assistant.create_llm", return_value=MagicMock()),
         patch("archer.core.assistant.AudioRecorder"),
         patch("archer.core.assistant.AudioPlayer"),
+        patch("archer.core.assistant.SileroVAD"),
         patch("os.makedirs"),
     ):
         return Assistant(config)
@@ -248,3 +250,170 @@ class TestCreateLLM:
         personality = PersonalityConfig()
         with pytest.raises(ValueError, match="Unknown LLM provider"):
             create_llm(config, personality)
+
+
+class TestProcessText:
+    def test_process_text_calls_llm_and_tts(self):
+        config = _make_config_with_emotions()
+        assistant = _make_assistant(config)
+
+        assistant.llm.stream.return_value = iter(["Hello!", "How are you?"])
+
+        with patch("archer.core.assistant.StreamingPipeline") as MockPipeline:
+            mock_pipeline = MagicMock()
+            MockPipeline.return_value = mock_pipeline
+
+            assistant._process_text("What is the weather?")
+
+        assistant.llm.stream.assert_called_once()
+        mock_pipeline.run.assert_called_once()
+
+    def test_process_text_does_not_call_stt(self):
+        config = _make_config_with_emotions()
+        assistant = _make_assistant(config)
+
+        assistant.llm.stream.return_value = iter(["Response."])
+
+        with patch("archer.core.assistant.StreamingPipeline") as MockPipeline:
+            MockPipeline.return_value = MagicMock()
+
+            assistant._process_text("hello")
+
+        assistant.stt.transcribe.assert_not_called()
+
+
+class TestRunDispatch:
+    def test_run_uses_legacy_loop_when_vad_disabled(self):
+        config = ArcherConfig()
+        assistant = _make_assistant(config)
+        assistant.recorder.record_until_enter.side_effect = KeyboardInterrupt
+
+        assistant.run()
+
+        assistant.recorder.record_until_enter.assert_called_once()
+
+    def test_run_uses_vad_loop_when_vad_enabled(self):
+        config = ArcherConfig(
+            listening=ListeningConfig(vad_enabled=True, mode="continuous"),
+        )
+        assistant = _make_assistant(config)
+
+        with patch.object(assistant, "_run_vad_loop", side_effect=KeyboardInterrupt):
+            assistant.run()
+
+    def test_vad_loop_continuous_processes_utterance(self):
+        config = ArcherConfig(
+            listening=ListeningConfig(vad_enabled=True, mode="continuous"),
+        )
+        assistant = _make_assistant(config)
+
+        utterance = np.ones(16000, dtype=np.float32)
+        call_count = 0
+
+        def fake_listen_continuous(vad, listening, paused):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise KeyboardInterrupt
+            yield utterance
+
+        assistant.recorder.listen_continuous = fake_listen_continuous
+
+        with patch.object(assistant, "_process_input") as mock_process:
+            try:
+                assistant._run_vad_loop()
+            except KeyboardInterrupt:
+                pass
+
+        mock_process.assert_called_once()
+
+    def test_vad_loop_wake_word_strips_prefix(self):
+        config = ArcherConfig(
+            listening=ListeningConfig(
+                vad_enabled=True,
+                mode="wake_word",
+                wake_word="hey archer",
+            ),
+        )
+        assistant = _make_assistant(config)
+        assistant.stt.transcribe.return_value = "hey archer what is the weather"
+
+        utterance = np.ones(16000, dtype=np.float32)
+        call_count = 0
+
+        def fake_listen_continuous(vad, listening, paused):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise KeyboardInterrupt
+            yield utterance
+
+        assistant.recorder.listen_continuous = fake_listen_continuous
+
+        with patch.object(assistant, "_process_text") as mock_process:
+            try:
+                assistant._run_vad_loop()
+            except KeyboardInterrupt:
+                pass
+
+        mock_process.assert_called_once_with("what is the weather")
+
+    def test_vad_loop_wake_word_only_waits_for_next(self):
+        config = ArcherConfig(
+            listening=ListeningConfig(
+                vad_enabled=True,
+                mode="wake_word",
+                wake_word="hey archer",
+            ),
+        )
+        assistant = _make_assistant(config)
+        assistant.stt.transcribe.return_value = "hey archer"
+
+        call_count = 0
+
+        def fake_listen_continuous(vad, listening, paused):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise KeyboardInterrupt
+            yield np.ones(16000, dtype=np.float32)
+
+        assistant.recorder.listen_continuous = fake_listen_continuous
+
+        with patch.object(assistant, "_process_text") as mock_process:
+            try:
+                assistant._run_vad_loop()
+            except KeyboardInterrupt:
+                pass
+
+        mock_process.assert_not_called()
+
+    def test_vad_loop_ignores_non_wake_word_speech(self):
+        config = ArcherConfig(
+            listening=ListeningConfig(
+                vad_enabled=True,
+                mode="wake_word",
+                wake_word="hey archer",
+            ),
+        )
+        assistant = _make_assistant(config)
+        assistant.stt.transcribe.return_value = "hello world"
+
+        call_count = 0
+
+        def fake_listen_continuous(vad, listening, paused):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise KeyboardInterrupt
+            yield np.ones(16000, dtype=np.float32)
+
+        assistant.recorder.listen_continuous = fake_listen_continuous
+
+        with patch.object(assistant, "_process_text") as mock_process:
+            try:
+                assistant._run_vad_loop()
+            except KeyboardInterrupt:
+                pass
+
+        mock_process.assert_not_called()

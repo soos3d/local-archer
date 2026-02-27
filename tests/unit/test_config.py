@@ -6,6 +6,7 @@ from archer.core.config import (
     ArcherConfig,
     AudioConfig,
     EmotionConfig,
+    ListeningConfig,
     LLMConfig,
     PersonalityConfig,
     STTConfig,
@@ -75,6 +76,30 @@ class TestPersonalityConfig:
         assert isinstance(config.emotion, EmotionConfig)
 
 
+class TestListeningConfig:
+    def test_defaults(self):
+        config = ListeningConfig()
+        assert config.vad_enabled is False
+        assert config.mode == "wake_word"
+        assert config.wake_word == "hey archer"
+        assert config.vad_threshold == 0.5
+        assert config.silence_duration_s == 1.2
+        assert config.pre_buffer_ms == 300
+        assert config.max_utterance_s == 30.0
+
+    def test_custom(self):
+        config = ListeningConfig(
+            vad_enabled=True,
+            mode="continuous",
+            wake_word="hey bot",
+            vad_threshold=0.7,
+        )
+        assert config.vad_enabled is True
+        assert config.mode == "continuous"
+        assert config.wake_word == "hey bot"
+        assert config.vad_threshold == 0.7
+
+
 class TestArcherConfig:
     def test_defaults(self):
         config = ArcherConfig()
@@ -85,6 +110,7 @@ class TestArcherConfig:
         assert isinstance(config.tts, TTSConfig)
         assert isinstance(config.llm, LLMConfig)
         assert isinstance(config.personality, PersonalityConfig)
+        assert isinstance(config.listening, ListeningConfig)
 
 
 class TestLoadYaml:
@@ -204,3 +230,38 @@ class TestLoadConfig:
         assert result.stt.provider == "whisper"
         assert result.tts.cfg_weight == 0.5
         assert result.llm.model == "gemma3"
+
+    def test_listening_config_from_yaml(self, tmp_config_dir):
+        main_data = {
+            "listening": {
+                "vad_enabled": True,
+                "mode": "continuous",
+                "wake_word": "hey bot",
+                "vad_threshold": 0.7,
+                "silence_duration_s": 1.5,
+                "pre_buffer_ms": 500,
+                "max_utterance_s": 20.0,
+            },
+        }
+        config_file = tmp_config_dir / "config.yaml"
+        config_file.write_text(yaml.dump(main_data))
+
+        result = load_config(str(config_file))
+
+        assert result.listening.vad_enabled is True
+        assert result.listening.mode == "continuous"
+        assert result.listening.wake_word == "hey bot"
+        assert result.listening.vad_threshold == 0.7
+        assert result.listening.silence_duration_s == 1.5
+        assert result.listening.pre_buffer_ms == 500
+        assert result.listening.max_utterance_s == 20.0
+
+    def test_listening_config_defaults_when_missing(self, tmp_config_dir):
+        main_data = {"assistant": {"name": "NoListening"}}
+        config_file = tmp_config_dir / "config.yaml"
+        config_file.write_text(yaml.dump(main_data))
+
+        result = load_config(str(config_file))
+
+        assert result.listening.vad_enabled is False
+        assert result.listening.mode == "wake_word"

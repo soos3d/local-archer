@@ -28,3 +28,14 @@ llm:
   provider: "ollama"
   model: "gemma3"
   base_url: "http://localhost:11434"
+
+listening:
+  vad_enabled: false
+  mode: "wake_word"        # "wake_word" or "continuous"
+  wake_word: "hey archer"
+  vad_threshold: 0.5       # VAD confidence threshold (0.0-1.0)
+  silence_duration_s: 1.2  # Seconds of silence before ending utterance
+  pre_buffer_ms: 300       # Milliseconds of audio to keep before speech onset
+  max_utterance_s: 30.0    # Maximum utterance length in seconds
+  conversation_timeout_s: 30.0  # Seconds of no speech before returning to wake word mode
+  post_speech_delay_s: 0.8      # Seconds to ignore mic after TTS to avoid echo pickup
