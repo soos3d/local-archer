@@ -8,6 +8,8 @@ A modular, local voice assistant powered by Ollama, Whisper, and Kyutai Pocket T
 - 🤖 **Local LLM** - Ollama for offline language model inference
 - 🔊 **Fast Speech** - Kyutai Pocket TTS (~6x real-time on CPU, ~200ms first-audio latency)
 - 🎭 **Voice Cloning** - Clone any voice from a WAV/MP3 sample (requires HuggingFace login)
+- 👂 **Hands-Free Listening** - Silero VAD with wake word detection ("hey archer") or continuous mode
+- 🔀 **Streaming Playback** - TTS synthesis and audio playback run concurrently for lower latency
 - ⚙️ **Configurable** - YAML-based configuration for easy customization
 - 🔌 **Modular** - Abstract interfaces for easy provider swapping
 
@@ -45,33 +47,58 @@ ollama pull gemma3  # or any model you prefer
 ### Run Archer
 
 ```bash
+# Default: press-Enter-to-talk mode
 python app.py
+
+# Or use the installed CLI entry point
+archer
 ```
 
 ## Usage
 
-### Basic Interaction
+### Listening Modes
 
-1. Run `python app.py`
-2. Press Enter to start recording
-3. Speak your message
-4. Press Enter to stop recording
-5. Archer transcribes, thinks, and responds with voice
+Archer supports three ways to capture your voice:
+
+| Mode | How to start | How it works |
+|---|---|---|
+| **Press-to-talk** (default) | `python app.py` | Press Enter to start recording, press Enter again to stop. |
+| **Wake word** | `python app.py --vad` | Say "hey archer" to activate, then speak naturally. Conversation stays active until a configurable timeout (default 30s of silence). |
+| **Continuous** | `python app.py --continuous` | Always listening — every detected utterance is processed. No wake word needed. |
 
 ### Command Line Options
 
 ```bash
-# Use a different config file
+python app.py [OPTIONS]
+```
+
+| Flag | Description |
+|---|---|
+| `--config PATH` | Path to a YAML config file (default: `config/default.yaml`) |
+| `--model NAME` | Override the LLM model (e.g. `llama3`, `gemma3`) |
+| `--voice PATH` | Override voice sample for cloning (WAV/MP3) |
+| `--exaggeration FLOAT` | Override base emotion exaggeration (0.0–1.0) |
+| `--save-voice` | Save generated voice responses to the `voices/` directory |
+| `--vad` | Enable VAD-based listening with wake word detection |
+| `--continuous` | Enable continuous listening (always-on, implies `--vad`) |
+
+### Examples
+
+```bash
+# Use a custom config
 python app.py --config config/custom.yaml
 
-# Voice cloning (use a 10-30 second audio sample; requires HF login — see below)
-python app.py --voice path/to/voice_sample.wav
+# Voice cloning with a different model (requires HF login — see below)
+python app.py --voice path/to/sample.wav --model llama3
 
-# Use a different LLM model
-python app.py --model llama3
+# Hands-free with wake word, save all responses
+python app.py --vad --save-voice
 
-# Save voice responses to files
-python app.py --save-voice
+# Always-on listening with higher emotion
+python app.py --continuous --exaggeration 0.7
+
+# Combine everything
+python app.py --vad --model gemma3 --voice my_voice.wav --save-voice
 ```
 
 ## Configuration
@@ -85,19 +112,34 @@ assistant:
 
 stt:
   provider: "whisper"
-  model: "base.en" # Options: tiny, base, small, medium, large
+  model: "base.en"            # Options: tiny, base, small, medium, large
+  min_audio_duration: 0.5     # Reject clips shorter than this (seconds)
+  silence_threshold: 0.001    # RMS below this is treated as silence
 
 tts:
-  provider: "pocket_tts"         # Default. Use "chatterbox" to switch back.
-  voice_sample: null             # Path to WAV/MP3 for voice cloning (overrides voice_name)
-  voice_name: null               # Built-in voice: alba, marius, javert, jean,
-                                 #   fantine, cosette, eponine, azelma
-  cfg_weight: 0.5                # Pacing control (chatterbox only)
+  provider: "pocket_tts"      # Or "chatterbox" for legacy provider
+  voice_sample: null           # Path to WAV/MP3 for voice cloning (overrides voice_name)
+  voice_name: null             # Built-in voice: alba, marius, javert, jean,
+                               #   fantine, cosette, eponine, azelma
+  cfg_weight: 0.5             # Pacing control (chatterbox only)
+  save_responses: false
+  output_dir: "voices"
 
 llm:
   provider: "ollama"
   model: "gemma3"
   base_url: "http://localhost:11434"
+
+listening:
+  vad_enabled: false
+  mode: "wake_word"              # "wake_word" or "continuous"
+  wake_word: "hey archer"
+  vad_threshold: 0.5             # VAD confidence (0.0-1.0)
+  silence_duration_s: 1.2        # Seconds of silence before ending an utterance
+  pre_buffer_ms: 300             # Audio kept before speech onset (avoids clipping)
+  max_utterance_s: 30.0          # Maximum single utterance length
+  conversation_timeout_s: 30.0   # Silence before wake word mode re-engages
+  post_speech_delay_s: 0.8       # Mic suppression after TTS to avoid echo
 ```
 
 ### Personality Config (`config/personalities/archer.yaml`)
@@ -123,11 +165,13 @@ emotion:
 ```
 archer/
 ├── core/
-│   ├── config.py          # Configuration loading
-│   └── assistant.py       # Main orchestrator
+│   ├── config.py          # Configuration dataclasses & YAML loading
+│   └── assistant.py       # Main orchestrator & conversation loop
 ├── audio/
-│   ├── recorder.py        # Microphone input
-│   └── player.py          # Audio output
+│   ├── recorder.py        # Microphone input (press-to-talk & VAD streaming)
+│   ├── player.py          # Audio output
+│   ├── vad.py             # Silero VAD wrapper
+│   └── pipeline.py        # Streaming TTS + playback pipeline
 ├── stt/
 │   ├── base.py            # Abstract STT interface
 │   └── whisper_stt.py     # Whisper implementation
@@ -181,6 +225,30 @@ Then point `voice_sample` at the `.safetensors` file — startup skips audio pro
 
 Set `provider: "chatterbox"` in config. Slower but supports `exaggeration` (emotion intensity) and `cfg_weight` (pacing).
 
+### Streaming Pipeline
+
+Regardless of provider, Archer uses a streaming pipeline that synthesizes and plays audio concurrently. The first sentence plays while later sentences are still being generated, significantly reducing perceived latency.
+
+## Listening Modes In Depth
+
+### Press-to-Talk (default)
+
+The simplest mode — no VAD model is loaded. Press Enter to start recording, press Enter again to stop.
+
+### Wake Word Mode (`--vad`)
+
+Loads Silero VAD and continuously listens for speech. When speech is detected, it's transcribed and checked for the wake word (default: "hey archer"). Once activated:
+
+- Archer enters a **conversation** where follow-up utterances are processed directly without repeating the wake word.
+- The conversation times out after `conversation_timeout_s` seconds of silence (default 30s), returning to wake word detection.
+- The wake word match is flexible — punctuation and extra whitespace between words are tolerated (e.g. "hey, archer!" works).
+
+### Continuous Mode (`--continuous`)
+
+Every detected utterance is processed immediately with no wake word required. Useful for dedicated assistant setups where only the intended user is near the microphone.
+
+Both VAD modes include echo suppression: the microphone is briefly muted after TTS playback (`post_speech_delay_s`) to prevent Archer from hearing its own voice.
+
 ## Tips
 
 ### Voice Cloning
@@ -194,6 +262,24 @@ Set `provider: "chatterbox"` in config. Slower but supports `exaggeration` (emot
 - Pocket TTS runs fast on CPU — no GPU needed
 - Smaller Whisper models (`tiny.en`, `base.en`) reduce transcription latency
 - Export voice state to `.safetensors` to avoid re-processing on each startup
+- The streaming pipeline overlaps TTS synthesis with playback — first audio plays while later sentences are still being generated
+
+### VAD Tuning
+
+- Raise `vad_threshold` (e.g. 0.7) if Archer triggers on background noise
+- Lower `silence_duration_s` for snappier turn-taking, raise it if Archer cuts you off
+- Increase `conversation_timeout_s` if you want longer pauses between turns in wake word mode
+- Adjust `post_speech_delay_s` if Archer picks up its own voice through the speakers
+
+### CLI Entry Point
+
+After `pip install -e .`, the `archer` command is available globally in your environment:
+
+```bash
+archer --vad --model llama3
+```
+
+This is equivalent to `python app.py` with the same flags.
 
 ## Troubleshooting
 

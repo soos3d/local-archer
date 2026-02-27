@@ -19,10 +19,13 @@ pip install -e ".[dev]"  # or: uv sync --group dev
 python -c "import nltk; nltk.download('punkt_tab')"
 
 # Run the assistant (Ollama must be running: ollama serve)
-python app.py
+python app.py                                              # press-to-talk (default)
+python app.py --vad                                        # wake word mode ("hey archer")
+python app.py --continuous                                 # always-on listening (implies --vad)
 python app.py --config config/custom.yaml
 python app.py --model llama3 --exaggeration 0.7 --save-voice
 python app.py --voice path/to/sample.wav
+archer --vad --model gemma3                                # installed CLI entry point
 
 # Run all tests (enforces 80% coverage via pytest-cov)
 pytest
